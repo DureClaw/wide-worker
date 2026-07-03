@@ -3,7 +3,7 @@
 // webclaw extension pre-loaded and a dedicated profile. Everything runs on
 // this one machine; no fleet bus or remote master required.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,9 +18,12 @@ function findChromium() {
   const base = join(ROOT, "chrome");
   if (!existsSync(base)) return null;
   const exe = process.platform === "win32" ? "chrome.exe" : "chrome";
-  // chrome/<platform-version>/chrome-<platform>/chrome.exe
+  const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+  // chrome/<platform-version>/chrome-<platform>/chrome.exe  (skip files like .metadata)
   for (const d of readdirSync(base)) {
+    if (!isDir(join(base, d))) continue;
     for (const inner of readdirSync(join(base, d))) {
+      if (!isDir(join(base, d, inner))) continue;
       const p = join(base, d, inner, exe);
       if (existsSync(p)) return p;
     }
