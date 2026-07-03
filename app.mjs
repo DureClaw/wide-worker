@@ -3,9 +3,10 @@
 // source, because in a SEA build there is no real source file on disk.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 // Assets (extension/, chrome/) sit next to this entry file. Under caxa the
 // file extracts to a temp dir and app.mjs runs from there with its siblings, so
@@ -16,9 +17,12 @@ const ROOT = here.replace(/[\\/]$/, "");
 const PORT = Number(process.env.PORT ?? 4111);
 const TOKEN = process.env.BRAIN_TOKEN ?? "";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+const CODEX_BIN = process.env.CODEX_BIN ?? "codex";
 const BARYON_URL = (process.env.BARYON_API_URL ?? "https://api.baryon.ai").replace(/\/$/, "");
 const BARYON_KEY = process.env.BARYON_API_KEY ?? "";
 const BARYON_MODEL = process.env.BARYON_MODEL ?? "claude-sonnet-5";
+// Backend order: which subscriptions to try, in order. All three by default.
+const CHAIN = (process.env.WW_BACKENDS ?? "claude,codex,baryon").split(",").map((s) => s.trim()).filter(Boolean);
 const PROFILE = join(ROOT, "profile");
 const EXT = join(ROOT, "extension");
 
@@ -49,14 +53,47 @@ async function askBaryon(prompt) {
   if (!text) throw new Error("baryon empty");
   return text;
 }
-async function exec(prompt) {
-  try { return { output: await askClaude(prompt), backend: "claude-cli" }; }
-  catch (e1) { try { return { output: await askBaryon(prompt), backend: "baryon-api" }; }
-    catch (e2) { throw new Error("claude: " + e1.message + " | baryon: " + e2.message); } }
+// backend 2: Codex CLI (ChatGPT subscription). Runs non-interactively and
+// writes only the final assistant message to a file (--output-last-message),
+// which avoids parsing the streaming log.
+function askCodex(prompt) {
+  return new Promise((resolve, reject) => {
+    const outFile = join(tmpdir(), `ww-codex-${Date.now()}.txt`);
+    const args = ["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
+      "--output-last-message", outFile, prompt];
+    const proc = spawn(CODEX_BIN, args, { stdio: ["ignore", "ignore", "pipe"], shell: process.platform === "win32" });
+    let err = "";
+    const t = setTimeout(() => { try { proc.kill(); } catch {} reject(new Error("codex timeout")); }, 150_000);
+    proc.stderr.on("data", (d) => (err += d));
+    proc.on("error", (e) => { clearTimeout(t); reject(e); });
+    proc.on("close", () => {
+      clearTimeout(t);
+      try {
+        const out = readFileSync(outFile, "utf8").trim();
+        try { rmSync(outFile); } catch {}
+        out ? resolve(out) : reject(new Error("codex empty: " + err.slice(0, 200)));
+      } catch (e) { reject(new Error("codex no output: " + err.slice(0, 200))); }
+    });
+  });
 }
-function probeClaude() {
+const BACKENDS = {
+  claude: { fn: askClaude, label: "claude-cli" },
+  codex: { fn: askCodex, label: "codex-cli" },
+  baryon: { fn: askBaryon, label: "baryon-api" },
+};
+async function exec(prompt) {
+  const errs = [];
+  for (const key of CHAIN) {
+    const b = BACKENDS[key];
+    if (!b) continue;
+    try { return { output: await b.fn(prompt), backend: b.label }; }
+    catch (e) { errs.push(key + ": " + e.message); }
+  }
+  throw new Error(errs.join(" | ") || "no backend configured");
+}
+function probeBin(bin, args) {
   return new Promise((res) => {
-    const p = spawn(CLAUDE_BIN, ["--version"], { stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+    const p = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
     let o = ""; p.stdout.on("data", (d) => (o += d)); p.on("error", () => res(null)); p.on("close", (c) => res(c === 0 ? o.trim() : null));
   });
 }
@@ -114,9 +151,10 @@ const DASHBOARD = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
 const $=s=>document.querySelector(s), log=$("#log");
 function add(cls,t){const d=document.createElement("div");d.className="msg "+cls;d.textContent=t;log.appendChild(d);d.scrollIntoView();}
 async function health(){try{const r=await fetch("/health");const j=await r.json();
-  const b=j.backends||{};const ready=b["claude-cli"]||b["baryon-api"];
+  const b=j.backends||{};const on=(j.chain||[]).filter(k=>b[k+"-cli"]||b[k+"-api"]);
+  const ready=on.length>0;
   $("#dot").className="dot "+(ready?"on":"off");
-  $("#stat").textContent=ready?("brain 준비됨 · "+(b["baryon-api"]?"baryon":"claude")):"두뇌 미설정 (BARYON_API_KEY 필요)";
+  $("#stat").textContent=ready?("연결됨 · "+on.join(" › ")):"두뇌 미연결";
 }catch(e){$("#dot").className="dot off";$("#stat").textContent="brain 연결 안 됨";}}
 async function ask(q){if(!q.trim())return;add("me",q);$("#q").value="";add("sys","🔍 생각 중…");
   try{const r=await fetch("/brain/exec",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt:q})});
@@ -141,8 +179,13 @@ function startBrain() {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(DASHBOARD); return;
     }
     if (req.method === "GET" && req.url === "/health") {
-      const claude = await probeClaude();
-      return json(200, { ok: true, service: "wide-worker", version: "0.1.0", backends: { "claude-cli": claude ?? false, "baryon-api": BARYON_KEY ? BARYON_URL : false } });
+      const [claude, codex] = await Promise.all([
+        probeBin(CLAUDE_BIN, ["--version"]), probeBin(CODEX_BIN, ["--version"]),
+      ]);
+      return json(200, {
+        ok: true, service: "wide-worker", version: "0.1.0", chain: CHAIN,
+        backends: { "claude-cli": claude ?? false, "codex-cli": codex ?? false, "baryon-api": BARYON_KEY ? BARYON_URL : false },
+      });
     }
     if (req.method === "POST" && req.url === "/brain/exec") {
       if (TOKEN) { if ((req.headers["authorization"] ?? "") !== "Bearer " + TOKEN) return json(401, { error: "unauthorized" }); }
@@ -208,7 +251,10 @@ if (!chromium) {
   setTimeout(() => {
     const b = spawn(chromium, [
       `--user-data-dir=${PROFILE}`, `--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`,
-      "--no-first-run", "--no-default-browser-check", "--start-maximized", `http://localhost:${PORT}/`,
+      "--no-first-run", "--no-default-browser-check", "--start-maximized",
+      // hide the "테스트용 Chrome … 자동 테스트 전용" infobar of Chrome-for-Testing
+      "--test-type", "--disable-features=Translate",
+      `http://localhost:${PORT}/`,
     ], { stdio: "ignore" });
     b.on("close", () => process.exit(0));
     console.log("  브라우저 실행 — webclaw 로드됨");
