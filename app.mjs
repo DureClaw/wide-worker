@@ -27,10 +27,13 @@ const PROFILE = join(ROOT, "profile");
 const EXT = join(ROOT, "extension");
 
 // ---------- brain backends ----------
+// Pass the prompt over stdin, never as a CLI arg — with shell:true on Windows a
+// prompt with spaces gets re-split by cmd into multiple args ("unexpected
+// argument"). Both claude and codex read instructions from stdin.
 function askClaude(prompt) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CLAUDE_BIN, ["-p", prompt, "--output-format", "text"], {
-      stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32",
+    const proc = spawn(CLAUDE_BIN, ["-p", "--output-format", "text"], {
+      stdio: ["pipe", "pipe", "pipe"], shell: process.platform === "win32",
     });
     let out = "", err = "";
     const t = setTimeout(() => { try { proc.kill(); } catch {} reject(new Error("claude timeout")); }, 120_000);
@@ -38,6 +41,7 @@ function askClaude(prompt) {
     proc.stderr.on("data", (d) => (err += d));
     proc.on("error", (e) => { clearTimeout(t); reject(e); });
     proc.on("close", (c) => { clearTimeout(t); c === 0 && out.trim() ? resolve(out.trim()) : reject(new Error("claude exit " + c + ": " + err.slice(0, 200))); });
+    proc.stdin.write(prompt); proc.stdin.end();
   });
 }
 async function askBaryon(prompt) {
@@ -59,13 +63,15 @@ async function askBaryon(prompt) {
 function askCodex(prompt) {
   return new Promise((resolve, reject) => {
     const outFile = join(tmpdir(), `ww-codex-${Date.now()}.txt`);
+    // "-" → read the prompt from stdin (avoids the shell arg-splitting issue)
     const args = ["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only",
-      "--output-last-message", outFile, prompt];
-    const proc = spawn(CODEX_BIN, args, { stdio: ["ignore", "ignore", "pipe"], shell: process.platform === "win32" });
+      "--output-last-message", outFile, "-"];
+    const proc = spawn(CODEX_BIN, args, { stdio: ["pipe", "ignore", "pipe"], shell: process.platform === "win32" });
     let err = "";
     const t = setTimeout(() => { try { proc.kill(); } catch {} reject(new Error("codex timeout")); }, 150_000);
     proc.stderr.on("data", (d) => (err += d));
     proc.on("error", (e) => { clearTimeout(t); reject(e); });
+    proc.stdin.write(prompt); proc.stdin.end();
     proc.on("close", () => {
       clearTimeout(t);
       try {
@@ -254,6 +260,7 @@ if (!chromium) {
       "--no-first-run", "--no-default-browser-check", "--start-maximized",
       // hide the "테스트용 Chrome … 자동 테스트 전용" infobar of Chrome-for-Testing
       "--test-type", "--disable-features=Translate",
+      "--hide-crash-restore-bubble", "--disable-session-crashed-bubble",
       `http://localhost:${PORT}/`,
     ], { stdio: "ignore" });
     b.on("close", () => process.exit(0));
