@@ -129,8 +129,20 @@ const server = http.createServer(async (req, res) => {
   json(404, { error: "not found — use GET /health or POST /brain/exec {prompt}" });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`wide-worker brain bridge listening on http://0.0.0.0:${PORT}`);
-  console.log(`  webclaw popup → Brain URL: http://<this-pc-ip>:${PORT}` + (TOKEN ? " (+ Brain token)" : ""));
+  console.log(`  webclaw popup → Brain URL: http://localhost:${PORT}` + (TOKEN ? " (+ Brain token)" : ""));
   console.log(`  backends: claude-cli(${CLAUDE_BIN}) → baryon(${BARYON_KEY ? BARYON_URL : "unset"})`);
+  // Self-diagnose the brain at startup so a single-machine setup fails loudly
+  // rather than only when the first request 500s.
+  let claudeOk = false;
+  try { await askClaude("Reply with exactly: OK"); claudeOk = true; } catch { /* probed below */ }
+  if (claudeOk) {
+    console.log("  ✅ brain ready — claude-cli responds");
+  } else if (BARYON_KEY) {
+    console.log("  ✅ brain ready — baryon-api (claude-cli headless unavailable)");
+  } else {
+    console.log("  ⚠️  두뇌 미준비: claude -p 가 인증 실패(구독은 headless 미지원일 수 있음)이고 BARYON_API_KEY 도 없습니다.");
+    console.log("     → config.local.json 에 BARYON_API_KEY 를 넣거나 ANTHROPIC_API_KEY 를 설정하세요.");
+  }
 });
