@@ -61,6 +61,74 @@ function probeClaude() {
   });
 }
 
+// ---------- dashboard (product home — distinct from a plain browser) ----------
+const DASHBOARD = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Wide Worker</title>
+<style>
+  :root{--cyan:#00ffcc;--mag:#ff00ff;--bg:#0a0c18}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background:radial-gradient(1200px 600px at 50% -10%,#12203a,#0a0c18 60%);color:#dbe7f0;
+    font:15px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100%}
+  .top{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;gap:10px;padding:12px 18px;
+    background:rgba(10,12,24,.6);backdrop-filter:blur(8px);border-bottom:1px solid rgba(0,255,204,.15)}
+  .logo{font-weight:800;font-size:18px;letter-spacing:.5px}
+  .logo b{background:linear-gradient(90deg,var(--cyan),var(--mag));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .pill{margin-left:auto;font:12px ui-monospace,monospace;color:#8fa9bd;display:flex;gap:8px;align-items:center}
+  .dot{width:9px;height:9px;border-radius:50%;background:#64748b;box-shadow:0 0 8px currentColor}
+  .dot.on{background:var(--cyan);color:var(--cyan)} .dot.off{background:#e11d48;color:#e11d48}
+  main{width:100%;max-width:760px;padding:96px 20px 40px;flex:1;display:flex;flex-direction:column}
+  .hero{text-align:center;margin:28px 0 22px}
+  .hero h1{font-size:40px;margin:0 0 6px} .hero h1 b{background:linear-gradient(90deg,var(--cyan),var(--mag));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p{color:#8fa9bd;margin:0}
+  .box{display:flex;gap:10px;margin:18px 0}
+  .box input{flex:1;padding:14px 16px;border-radius:12px;border:1px solid rgba(0,255,204,.35);
+    background:rgba(0,0,0,.35);color:#eaf6ff;font-size:15px;outline:none}
+  .box input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,255,204,.12)}
+  .box button{padding:0 20px;border:0;border-radius:12px;font-weight:700;cursor:pointer;
+    background:linear-gradient(90deg,var(--cyan),#38bdf8);color:#04121a}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:6px}
+  .chip{font-size:12px;color:#a7c4d6;border:1px solid rgba(0,255,204,.2);border-radius:999px;padding:5px 11px;cursor:pointer;background:rgba(0,255,204,.05)}
+  .chip:hover{border-color:var(--cyan)}
+  .log{flex:1;margin-top:16px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+  .msg{padding:10px 14px;border-radius:12px;max-width:88%;white-space:pre-wrap;word-break:break-word}
+  .me{align-self:flex-end;background:rgba(255,209,102,.14);border:1px solid rgba(255,209,102,.3)}
+  .ai{align-self:flex-start;background:rgba(0,255,204,.08);border:1px solid rgba(0,255,204,.2)}
+  .sys{align-self:center;color:#6b8298;font-size:12px}
+  .foot{color:#5b7186;font-size:12px;text-align:center;padding:14px}
+</style></head><body>
+  <div class="top"><span class="logo">◇ <b>Wide&nbsp;Worker</b></span>
+    <span class="pill"><span class="dot" id="dot"></span><span id="stat">확인 중…</span></span></div>
+  <main>
+    <div class="hero"><h1>무엇을 <b>도와드릴까요?</b></h1><p>브라우저를 조종하는 자율 에이전트 — 지시하면 대신 실행합니다.</p></div>
+    <div class="chips">
+      <span class="chip" data-q="호랑이 이미지 5장 다운로드해줘">🐯 이미지 수집</span>
+      <span class="chip" data-q="오늘 서울 날씨 검색해줘">🌤️ 검색</span>
+      <span class="chip" data-q="이 브라우저로 무엇을 할 수 있어?">💡 사용법</span>
+    </div>
+    <div class="box"><input id="q" placeholder="지시를 입력하세요… (예: 파이썬 최신 릴리스 찾아줘)" autofocus>
+      <button id="go">실행</button></div>
+    <div class="log" id="log"></div>
+  </main>
+  <div class="foot">Wide Worker · 단독 머신 자율 브라우저 에이전트 · webclaw + brain</div>
+<script>
+const $=s=>document.querySelector(s), log=$("#log");
+function add(cls,t){const d=document.createElement("div");d.className="msg "+cls;d.textContent=t;log.appendChild(d);d.scrollIntoView();}
+async function health(){try{const r=await fetch("/health");const j=await r.json();
+  const b=j.backends||{};const ready=b["claude-cli"]||b["baryon-api"];
+  $("#dot").className="dot "+(ready?"on":"off");
+  $("#stat").textContent=ready?("brain 준비됨 · "+(b["baryon-api"]?"baryon":"claude")):"두뇌 미설정 (BARYON_API_KEY 필요)";
+}catch(e){$("#dot").className="dot off";$("#stat").textContent="brain 연결 안 됨";}}
+async function ask(q){if(!q.trim())return;add("me",q);$("#q").value="";add("sys","🔍 생각 중…");
+  try{const r=await fetch("/brain/exec",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt:q})});
+    const j=await r.json();log.lastChild.remove();
+    if(j.output){add("ai",j.output);}else{add("ai","⚠️ "+(j.error||"응답 없음"));}
+  }catch(e){log.lastChild.remove();add("ai","⚠️ brain 연결 실패: "+e);}}
+$("#go").onclick=()=>ask($("#q").value);
+$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")ask($("#q").value);});
+document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>ask(c.dataset.q));
+health();setInterval(health,5000);
+</script></body></html>`;
+
 // ---------- brain HTTP server ----------
 function startBrain() {
   const server = http.createServer(async (req, res) => {
@@ -69,6 +137,9 @@ function startBrain() {
     res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
     const json = (c, o) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+    if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(DASHBOARD); return;
+    }
     if (req.method === "GET" && req.url === "/health") {
       const claude = await probeClaude();
       return json(200, { ok: true, service: "wide-worker", version: "0.1.0", backends: { "claude-cli": claude ?? false, "baryon-api": BARYON_KEY ? BARYON_URL : false } });
@@ -137,7 +208,7 @@ if (!chromium) {
   setTimeout(() => {
     const b = spawn(chromium, [
       `--user-data-dir=${PROFILE}`, `--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`,
-      "--no-first-run", "--no-default-browser-check", "--start-maximized", "https://www.google.com",
+      "--no-first-run", "--no-default-browser-check", "--start-maximized", `http://localhost:${PORT}/`,
     ], { stdio: "ignore" });
     b.on("close", () => process.exit(0));
     console.log("  브라우저 실행 — webclaw 로드됨");
