@@ -5,11 +5,13 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// In a SEA exe, process.execPath is the exe; assets live beside it. When run as
-// plain `node app.mjs`, fall back to the script's directory.
-const isSea = (() => { try { return require("node:sea").isSea(); } catch { return false; } })();
-const ROOT = isSea ? dirname(process.execPath) : dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+// Assets (extension/, chrome/) sit next to this entry file. Under caxa the
+// file extracts to a temp dir and app.mjs runs from there with its siblings, so
+// import.meta.dirname is correct in every mode (plain node, caxa exe).
+const here = fileURLToPath(new URL(".", import.meta.url));
+const ROOT = here.replace(/[\\/]$/, "");
 
 const PORT = Number(process.env.PORT ?? 4111);
 const TOKEN = process.env.BRAIN_TOKEN ?? "";
