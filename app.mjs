@@ -88,6 +88,11 @@ function startBrain() {
     }
     json(404, { error: "use GET /health or POST /brain/exec" });
   });
+  server.on("error", (e) => {
+    if (e.code === "EADDRINUSE") {
+      console.log(`  ℹ️  brain 이미 :${PORT} 에서 실행 중 — 기존 인스턴스 재사용, 브라우저만 엽니다.`);
+    } else { console.error("brain error:", e.message); }
+  });
   server.listen(PORT, async () => {
     console.log(`wide-worker brain on http://localhost:${PORT}`);
     let ok = false; try { await askClaude("Reply with exactly: OK"); ok = true; } catch {}
