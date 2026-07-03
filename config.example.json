@@ -1,0 +1,8 @@
+{
+  "PORT": "4111",
+  "BRAIN_TOKEN": "",
+  "CLAUDE_BIN": "claude",
+  "BARYON_API_URL": "https://api.baryon.ai",
+  "BARYON_API_KEY": "",
+  "BARYON_MODEL": "claude-sonnet-5"
+}
