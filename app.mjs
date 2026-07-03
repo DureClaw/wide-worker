@@ -225,16 +225,19 @@ function startBrain() {
 // ---------- Chromium launcher ----------
 function findChromium() {
   if (process.env.CHROMIUM_PATH && existsSync(process.env.CHROMIUM_PATH)) return process.env.CHROMIUM_PATH;
-  const base = join(ROOT, "chrome");
-  if (!existsSync(base)) return null;
   const exe = process.platform === "win32" ? "chrome.exe" : "chrome";
   const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
-  for (const d of readdirSync(base)) {
-    if (!isDir(join(base, d))) continue;
-    for (const inner of readdirSync(join(base, d))) {
-      if (!isDir(join(base, d, inner))) continue;
-      const p = join(base, d, inner, exe);
-      if (existsSync(p)) return p;
+  // Prefer the branded-banner-free Chromium snapshot over Chrome-for-Testing.
+  for (const bn of ["chromium", "chrome"]) {
+    const base = join(ROOT, bn);
+    if (!existsSync(base)) continue;
+    for (const d of readdirSync(base)) {
+      if (!isDir(join(base, d))) continue;
+      for (const inner of readdirSync(join(base, d))) {
+        if (!isDir(join(base, d, inner))) continue;
+        const p = join(base, d, inner, exe);
+        if (existsSync(p)) return p;
+      }
     }
   }
   return null;
