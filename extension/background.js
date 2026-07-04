@@ -280,12 +280,39 @@ function waitTabReady(tabId, timeoutMs = 15000) {
   });
 }
 
+// Put a webclaw-opened tab into a Chrome tab group so the fleet's tabs are
+// visually clustered in the tab strip. Prefers the active task's group; else a
+// shared "webclaw" group in the same window (reused if it already exists).
+async function groupWebclawTab(tab) {
+  try {
+    const { tasks, activeId } = await wwGet();
+    const active = tasks.find((t) => t.id === activeId);
+    if (active && active.groupId != null) {
+      try { await chrome.tabs.group({ tabIds: [tab.id], groupId: active.groupId }); return active.groupId; } catch {}
+    }
+    let gid = null;
+    try {
+      const gs = await chrome.tabGroups.query({ title: "webclaw", windowId: tab.windowId });
+      if (gs[0]) gid = gs[0].id;
+    } catch {}
+    if (gid != null) {
+      await chrome.tabs.group({ tabIds: [tab.id], groupId: gid });
+    } else {
+      gid = await chrome.tabs.group({ tabIds: [tab.id] });
+      await chrome.tabGroups.update(gid, { title: "webclaw", color: "cyan" });
+    }
+    return gid;
+  } catch (e) { return null; }
+}
+
 // [OPEN] <url> — open a URL in a new foreground tab (loads with the user's
 // session), wait for it to finish, return title+URL. The natural way to *show*
-// a result to the human (e.g. a search) instead of scraping it.
+// a result to the human (e.g. a search) instead of scraping it. The new tab is
+// added to the fleet's tab group so opened tabs stay clustered.
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (!msg || msg.type !== "open") return;
   chrome.tabs.create({ url: msg.url, active: true }).then(async (tab) => {
+    await groupWebclawTab(tab);
     await waitTabReady(tab.id, 20000);
     const t = await chrome.tabs.get(tab.id);
     hudNotify(tab.id, "[OPEN] " + msg.url.slice(0, 80));
@@ -298,11 +325,27 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 // session and target it with @<url-substring>.
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (!msg || msg.type !== "tabs") return;
-  chrome.tabs.query({}).then((tabs) => {
-    const list = tabs
-      .map((t) => `${t.active ? "*" : " "} [${t.windowId}] ${t.title || ""} — ${t.url || ""}`)
-      .join("\n");
-    sendResponse({ text: list.slice(0, CAP) || "(no tabs)" });
+  chrome.tabs.query({}).then(async (tabs) => {
+    // Map groupId → title so the listing can cluster tabs by their group.
+    const gmap = {};
+    try { (await chrome.tabGroups.query({})).forEach((g) => { gmap[g.id] = g.title || ("group " + g.id); }); } catch {}
+    const NG = "__ungrouped";
+    const groups = {};
+    for (const t of tabs) {
+      const key = (t.groupId != null && t.groupId !== -1) ? gmap[t.groupId] || ("group " + t.groupId) : NG;
+      (groups[key] = groups[key] || []).push(t);
+    }
+    // Named groups first (webclaw's clusters), ungrouped last.
+    const keys = Object.keys(groups).filter((k) => k !== NG).sort();
+    if (groups[NG]) keys.push(NG);
+    const out = keys.map((k) => {
+      const head = k === NG ? "▸ (그룹 없음)" : "▸ [" + k + "]";
+      const lines = groups[k]
+        .map((t) => `   ${t.active ? "*" : " "} [w${t.windowId}] ${t.title || ""} — ${t.url || ""}`)
+        .join("\n");
+      return head + "\n" + lines;
+    }).join("\n");
+    sendResponse({ text: out.slice(0, CAP) || "(no tabs)" });
   });
   return true; // async
 });
@@ -493,9 +536,12 @@ function hudNotify(tabId, text, click, working, scope) {
 
 function hudInjected(text, click, off, working, hist, scope) {
       const ID = "__wc_hud";
+      const PW = 320; // docked chat width — reserves this much page gutter (aside-style)
       if (off) {
         const r = document.getElementById(ID); if (r) r.remove();
         const s = document.getElementById(ID + "_style"); if (s) s.remove();
+        // release the reserved gutter so the page reclaims full width
+        document.documentElement.style.removeProperty("margin-right");
         return "hud off";
       }
       if (!document.getElementById(ID + "_style")) {
@@ -515,10 +561,14 @@ function hudInjected(text, click, off, working, hist, scope) {
         frame.className = "f";
         // The glow border only shows *while an action is executing* (fades out
         // a few seconds after the last action) — a steady blink is noise.
-        frame.style.cssText = "position:fixed;inset:0;border:7px solid #00ffcc;border-radius:12px;animation:__wcGlow 1.4s ease-in-out infinite;pointer-events:none;opacity:0;transition:opacity .4s";
+        // Bounds the *content* region (stops at the docked panel), not the panel.
+        frame.style.cssText = "position:fixed;top:0;left:0;bottom:0;right:" + PW + "px;border:7px solid #00ffcc;animation:__wcGlow 1.4s ease-in-out infinite;pointer-events:none;opacity:0;transition:opacity .4s";
         const panel = document.createElement("div");
         panel.className = "p";
-        panel.style.cssText = "position:fixed;top:14px;right:14px;bottom:14px;width:280px;display:flex;flex-direction:column;background:rgba(10,12,24,.88);color:#c8ffee;font:11px/1.5 ui-monospace,monospace;border:1px solid #00ffcc;border-radius:10px;padding:10px;pointer-events:auto;backdrop-filter:blur(3px)";
+        // Docked to the right edge, full height — a reserved column (aside-style),
+        // NOT a floating card. The page is pushed left by PW (margin-right below),
+        // so the panel never covers page content.
+        panel.style.cssText = "position:fixed;top:0;right:0;bottom:0;width:" + PW + "px;display:flex;flex-direction:column;background:rgba(10,12,24,.94);color:#c8ffee;font:12px/1.5 ui-monospace,monospace;border-left:2px solid #00ffcc;padding:12px;pointer-events:auto;box-shadow:-4px 0 24px rgba(0,0,0,.45);box-sizing:border-box;z-index:2147483647";
         panel.innerHTML = "<div style='color:#00ffcc;font-weight:700;margin-bottom:6px'>💬 webclaw chat <span style='color:#8fa3b8;font-weight:400;font-size:10px'>— 이 탭의 대화</span></div><div class='lines' style='flex:1;overflow-y:auto'></div>";
         // #11 — two-way chat: the human can instruct the agent from the page.
         const input = document.createElement("input");
@@ -541,6 +591,10 @@ function hudInjected(text, click, off, working, hist, scope) {
         cur.textContent = "🖱️";
         root.append(frame, panel, cur);
         document.documentElement.appendChild(root);
+        // Reserve a gutter on the right so the docked panel doesn't overlap the
+        // page — the page content shrinks by PW instead of being covered.
+        document.documentElement.style.setProperty("transition", "margin-right .2s ease");
+        document.documentElement.style.setProperty("margin-right", PW + "px", "important");
       }
       if (working) {
         const frame = root.querySelector(".f");
